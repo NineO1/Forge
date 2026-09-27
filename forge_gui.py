@@ -202,9 +202,33 @@ class ForgeGUI(QMainWindow):
         self.gen_status = QLabel("")
         v.addWidget(self.gen_status)
         v.addWidget(QLabel("Prompt:"))
+        prow = QHBoxLayout()
         self.prompt_input = QLineEdit()
         self.prompt_input.setPlaceholderText("Describe what to generate...")
-        v.addWidget(self.prompt_input)
+        self.magic_btn = QPushButton("\u2728 Magic")
+        self.magic_btn.setToolTip("Rewrite this prompt into a cinematic, motion-rich version")
+        prow.addWidget(self.prompt_input, 1)
+        prow.addWidget(self.magic_btn)
+        v.addLayout(prow)
+        # MAGIC PANEL - read-only suggestion display
+        self.magic_panel = QTextEdit()
+        self.magic_panel.setReadOnly(True)
+        self.magic_panel.setPlaceholderText(
+            "Press Magic to get a cinematic suggestion for your prompt...")
+        self.magic_panel.setMaximumHeight(90)
+        self.magic_panel.setStyleSheet(
+            "QTextEdit { color: #cfb2ff; font-family: 'Segoe UI'; }")
+        mrow = QHBoxLayout()
+        mrow.addStretch()
+        self.magic_insert_btn = QPushButton("Insert")
+        self.magic_insert_btn.setFixedWidth(90)
+        self.magic_clear_btn = QPushButton("Clear")
+        self.magic_clear_btn.setFixedWidth(90)
+        mrow.addWidget(self.magic_insert_btn)
+        mrow.addWidget(self.magic_clear_btn)
+        v.addWidget(self.magic_panel)
+        v.addLayout(mrow)
+
         v.addWidget(QLabel("Negative prompt (optional):"))
         self.neg_prompt_input = QLineEdit()
         v.addWidget(self.neg_prompt_input)
@@ -275,12 +299,35 @@ class ForgeGUI(QMainWindow):
         self.init_img_btn.clicked.connect(self.browse_init_image)
         self.input_path.textChanged.connect(self.refresh_relevance)
         self.prompt_input.textChanged.connect(self.refresh_relevance)
+        self.magic_btn.clicked.connect(self.do_magic)
+        self.magic_insert_btn.clicked.connect(self.insert_magic)
+        self.magic_clear_btn.clicked.connect(self.clear_magic)
         self.init_img_path.textChanged.connect(self.refresh_relevance)
         self.copy_log_btn.clicked.connect(self.copy_log)
         self.start_btn.clicked.connect(self.start_processing)
         self.cancel_btn.clicked.connect(self.cancel_processing)
         for cb in (self.cb_scenes, self.cb_detect, self.cb_transcribe, self.cb_frames):
             cb.stateChanged.connect(lambda *_: self.refresh_relevance())
+
+    def do_magic(self):
+        prompt = self.prompt_input.text().strip()
+        if not prompt:
+            self.magic_panel.setPlainText(
+                "Write a prompt first, then press Magic.")
+            return
+        from forge.magic import enhance_prompt
+        self.magic_panel.setPlainText(enhance_prompt(prompt))
+        self.append_log(f"[MAGIC] Original prompt: {prompt}")
+
+    def insert_magic(self):
+        text = self.magic_panel.toPlainText().strip()
+        if not text or text.startswith("Write a prompt"):
+            return
+        self.prompt_input.setText(text)
+        self.append_log("[MAGIC] Enhanced prompt inserted into prompt field")
+
+    def clear_magic(self):
+        self.magic_panel.clear()
 
     def input_type(self):
         ext = os.path.splitext(self.input_path.text())[1].lower()

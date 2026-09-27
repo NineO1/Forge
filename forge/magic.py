@@ -70,8 +70,8 @@ _HINTS = {
 
 def _stable_pick(bank, text, salt):
     """Deterministically pick a term from a bank based on the prompt text."""
-    idx = (hash((text.strip().lower(), salt)) % len(bank))
-    return bank[idx]
+    h = sum(ord(c) for c in (salt + text.strip().lower()))
+    return bank[h % len(bank)]
 
 
 def _has_hint(prompt_lower, category):
