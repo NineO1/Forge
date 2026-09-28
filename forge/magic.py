@@ -142,4 +142,7 @@ def enhance_prompt(text: str, include_auto_negative: bool = True) -> tuple[str, 
 if __name__ == "__main__":
     import sys
     sample = " ".join(sys.argv[1:]) or "a man standing on a rooftop at night"
-    print(enhance_prompt(sample))
+    enhanced, neg = enhance_prompt(sample)
+    print(enhanced)
+    print()
+    print(f"[auto negative: {neg}]")

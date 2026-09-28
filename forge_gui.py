@@ -436,34 +436,6 @@ class ForgeGUI(QMainWindow):
             else:
                 self.gen_status.setText("Enter a prompt")
 
-        if itype == "image" and not init_img:
-            self.init_img_path.setPlaceholderText(
-                f"Using your imported image: {os.path.basename(self.input_path.text())}")
-        elif video_feed_note:
-            self.init_img_path.setPlaceholderText(
-                "Auto: middle frame of your video will be used")
-        else:
-            self.init_img_path.setPlaceholderText(
-                "Browse for an image (Image-> modes)")
-
-        if gen_ready:
-            self.g_gen.setStyleSheet(f"QGroupBox {{ {READY_BORDER} }}")
-            if prompt or not needs_image:
-                note = " (using middle frame of video)" if video_feed_note else ""
-                self.gen_status.setText(f"READY: {rb.text()} will run{note}")
-            else:
-                self.gen_status.setText(
-                    f"READY: {rb.text()} will run using your imported image")
-        else:
-            self.g_gen.setStyleSheet("")
-            if not prompt and not needs_image:
-                self.gen_status.setText("Enter a prompt or import an image")
-            elif needs_image:
-                self.gen_status.setText(
-                    f"{rb.text()} needs an image - import one, or a video for auto-feed")
-            else:
-                self.gen_status.setText("Enter a prompt")
-
     def _current_gen_mode(self):
         pairs = [(self.rb_t2i, "t2i"), (self.rb_i2i, "i2i"),
                  (self.rb_t2v, "t2v"), (self.rb_i2v, "i2v")]
@@ -556,6 +528,9 @@ class ForgeGUI(QMainWindow):
         gen_steps = self.steps_combo.currentData()
         gen_frames = self.dur_combo.currentData()
         gen_seed = self.seed_spin.value() or None
+
+        rb, mode = self._current_gen_mode()
+        needs_image = mode in ("i2i", "i2v")
         init_img = self.effective_init_image()
         run_gen = bool(prompt) or (needs_image and init_img) or \
                   (needs_image and itype == "image")
