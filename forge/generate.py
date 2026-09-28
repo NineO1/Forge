@@ -208,6 +208,11 @@ def text_to_video(prompt, output_dir, filename=None, negative_prompt="",
     out_path = os.path.join(out_dir, fname)
 
     num_frames = _fix_frame_count(num_frames)
+    width = _snap(width, 32, 256, 1280) # raised for 16:9 options
+    height = _snap(height, 32, 256, 736)
+    num_frames = _snap(num_frames - 1, 8, 8, 240) + 1 # up to ~10s @ 24fps
+    _vram_guard(width, height, num_frames)
+    log.info(f"snapped: {width}x{height} @ {num_frames} frames")
     if job_state:
         job_state.update(progress=5, message=f"Loading LTX-Video (first run ~10GB)...")
 
@@ -217,11 +222,6 @@ def text_to_video(prompt, output_dir, filename=None, negative_prompt="",
     gen = gen.manual_seed(seed) if seed is not None else gen
 
     cb = _steps(steps, pipe, job_state, "t2v")
-    width = _snap(width, 32, 256, 1280) # raised for 16:9 options
-    height = _snap(height, 32, 256, 736)
-    num_frames = _snap(num_frames - 1, 8, 8, 240) + 1 # up to ~10s @ 24fps
-    _vram_guard(width, height, num_frames)
-    log.info(f"snapped: {width}x{height} @ {num_frames} frames")
     video = pipe(prompt=prompt, negative_prompt=negative_prompt,
                 width=width, height=height, num_frames=num_frames,
                 num_inference_steps=steps, guidance_scale=guidance_scale,
@@ -255,6 +255,11 @@ def image_to_video(prompt, init_image, output_dir, filename=None,
     out_path = os.path.join(out_dir, fname)
 
     num_frames = _fix_frame_count(num_frames)
+    width = _snap(width, 32, 256, 1280) # raised for 16:9 options
+    height = _snap(height, 32, 256, 736)
+    num_frames = _snap(num_frames - 1, 8, 8, 240) + 1 # up to ~10s @ 24fps
+    _vram_guard(width, height, num_frames)
+    log.info(f"snapped: {width}x{height} @ {num_frames} frames")
     if job_state:
         job_state.update(progress=5, message="Loading LTX-Video...")
 
@@ -266,11 +271,6 @@ def image_to_video(prompt, init_image, output_dir, filename=None,
     gen = gen.manual_seed(seed) if seed is not None else gen
 
     cb = _steps(steps, pipe, job_state, "i2v")
-    width = _snap(width, 32, 256, 1280) # raised for 16:9 options
-    height = _snap(height, 32, 256, 736)
-    num_frames = _snap(num_frames - 1, 8, 8, 240) + 1 # up to ~10s @ 24fps
-    _vram_guard(width, height, num_frames)
-    log.info(f"snapped: {width}x{height} @ {num_frames} frames")
     video = pipe(prompt=prompt, negative_prompt=negative_prompt,
                 image=src, width=width, height=height,
                 num_frames=num_frames, num_inference_steps=steps,
