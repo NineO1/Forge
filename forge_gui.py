@@ -234,6 +234,14 @@ class ForgeGUI(QMainWindow):
         self.neg_prompt_input = QLineEdit()
         v.addWidget(self.neg_prompt_input)
 
+        # POLISH OPTIONS
+        pol_row = QHBoxLayout()
+        self.pol_upscale = QCheckBox("Upscale 2x (1080p target)")
+        self.pol_interp = QCheckBox("Frame interpolate to 48fps")
+        pol_row.addWidget(self.pol_upscale)
+        pol_row.addWidget(self.pol_interp)
+        v.addLayout(pol_row)
+
         row = QHBoxLayout()
         self.rb_t2i = QRadioButton("Text -> Image")
         self.rb_i2i = QRadioButton("Image -> Image")
@@ -601,7 +609,19 @@ class ForgeGUI(QMainWindow):
                                        num_frames=gen_frames, seed=gen_seed,
                                        job_state=ws)
                 results["stages"]["generate"] = {"output": p}
-                ws.update(progress=100, message="Generation done")
+                ws.update(progress=80, message="Generation done - polishing...")
+                
+                # Post-process if requested
+                do_up = self.pol_upscale.isChecked()
+                do_int = self.pol_interp.isChecked()
+                if do_up or do_int:
+                    from forge.polish import polish_video
+                    polished = p.replace(".mp4", "_polished.mp4")
+                    polished = polish_video(p, polished, do_upscale=do_up,
+                                            do_interpolate=do_int, job_state=ws)
+                    results["stages"]["generate"]["output"] = polished
+                    results["stages"]["polish"] = {"output": polished}
+                ws.update(progress=100, message="Polish complete")
             return results
 
         self.start_btn.setEnabled(False)

@@ -172,6 +172,10 @@ def _vram_guard(width, height, num_frames):
     import torch
     if not torch.cuda.is_available():
         return
+    # HARD CAP: torch rejects allocations beyond 90% of TOTAL VRAM.
+    # Prevents Windows shared-memory spillover (silent slowdown) instead
+    # of ever exceeding the dedicated limit.
+    torch.cuda.set_per_process_memory_fraction(_VRAM_CAP)
     projected = _vram_projected_gb(width, height, num_frames)
     free_gb = torch.cuda.mem_get_info()[0] / (1024 ** 3)
     cap_gb = free_gb * _VRAM_CAP
@@ -182,7 +186,9 @@ def _vram_guard(width, height, num_frames):
         raise RuntimeError(
             f"{width}x{height} @ {num_frames} frames projects to "
             f"{projected:.1f}GB, above the 90% guard ({cap_gb:.1f}GB free). "
-            f"Lower duration or resolution.")
+            f"Lower duration or resolution. NOTE: even if a job passes this "
+            f"check, the hard 90% cap stops any allocation that would "
+            f"spill GPU memory into shared system RAM.")
 
 LTX_MODEL = "Lightricks/LTX-Video"
 
@@ -192,7 +198,12 @@ def _ltx_pipe(cls):
     else:
         kwargs = {}
     pipe = cls.from_pretrained(LTX_MODEL, **kwargs)
-    return pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    # VAE tiling: decode in spatial tiles instead of one huge tensor.
+    # Massive VRAM reduction at the decode stage, negligible quality cost.
+    if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
+        pipe.vae.enable_tiling()
+    return pipe
 
 # -------------------------------------------------------------- text->video
 def text_to_video(prompt, output_dir, filename=None, negative_prompt="",
