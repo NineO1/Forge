@@ -278,6 +278,14 @@ class ForgeGUI(QMainWindow):
         self.steps_combo.addItem("70 (slow)", 70)
         self.steps_combo.setCurrentIndex(1)
         srow1.addWidget(self.steps_combo)
+        srow1.addWidget(QLabel("Guidance:"))
+        self.guidance_combo = QComboBox()
+        self.guidance_combo.addItem("3.5 (loose)", 3.5)
+        self.guidance_combo.addItem("4.5 (default)", 4.5)
+        self.guidance_combo.addItem("5.5 (strict)", 5.5)
+        self.guidance_combo.addItem("6.5 (rigid)", 6.5)
+        self.guidance_combo.setCurrentIndex(1)
+        srow1.addWidget(self.guidance_combo)
         v.addLayout(srow1)
 
         srow2 = QHBoxLayout()
@@ -534,6 +542,7 @@ class ForgeGUI(QMainWindow):
             neg_prompt = EXTENDED_NEGATIVE_PROMPT
         gen_w, gen_h = self.res_combo.currentData()
         gen_steps = self.steps_combo.currentData()
+        gen_guidance = self.guidance_combo.currentData()
         gen_frames = self.dur_combo.currentData()
         gen_seed = self.seed_spin.value() or None
 
@@ -599,6 +608,7 @@ class ForgeGUI(QMainWindow):
                     p = text_to_video(prompt, out_dir, filename="generated.mp4",
                                       negative_prompt=neg_prompt, width=gen_w,
                                       height=gen_h, steps=gen_steps,
+                                      guidance_scale=gen_guidance,
                                       num_frames=gen_frames, seed=gen_seed,
                                       job_state=ws)
                 else:
@@ -606,6 +616,7 @@ class ForgeGUI(QMainWindow):
                                        filename="generated.mp4",
                                        negative_prompt=neg_prompt, width=gen_w,
                                        height=gen_h, steps=gen_steps,
+                                       guidance_scale=gen_guidance,
                                        num_frames=gen_frames, seed=gen_seed,
                                        job_state=ws)
                 results["stages"]["generate"] = {"output": p}
@@ -630,6 +641,10 @@ class ForgeGUI(QMainWindow):
         self.append_log(f"[INFO] START: {os.path.basename(src) if src else 'generation only'}")
         self.append_log(f"[INFO] Modes: {[k for k, v in feats.items() if v]}"
                         + (f" + {mode}" if run_gen else ""))
+        if run_gen:
+            seed_note = f"{gen_seed} (fixed)" if gen_seed else "random"
+            self.append_log(f"[INFO] Seed: {seed_note} | Steps: {gen_steps} | "
+                            f"Guidance: {gen_guidance}")
 
         self.worker = JobWorker(job_fn)
         self.worker.progress.connect(self.on_progress)
