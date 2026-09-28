@@ -9,7 +9,8 @@ import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QCheckBox, QProgressBar,
-    QTextEdit, QGroupBox, QMessageBox, QScrollArea, QRadioButton
+    QTextEdit, QGroupBox, QMessageBox, QScrollArea, QRadioButton,
+    QComboBox, QSpinBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction
@@ -252,6 +253,39 @@ class ForgeGUI(QMainWindow):
         irow.addWidget(self.init_img_path, 1)
         irow.addWidget(self.init_img_btn)
         v.addLayout(irow)
+
+        # GEN SETTINGS
+        srow1 = QHBoxLayout()
+        srow1.addWidget(QLabel("Resolution:"))
+        self.res_combo = QComboBox()
+        self.res_combo.addItem("Sweet spot (704x480)", (704, 480))
+        self.res_combo.addItem("Widescreen 16:9 (1024x576)", (1024, 576))
+        self.res_combo.addItem("Compact 16:9 (512x288)", (512, 288))
+        self.res_combo.addItem("Classic 4:3 (640x480)", (640, 480))
+        srow1.addWidget(self.res_combo, 1)
+        srow1.addWidget(QLabel("Steps:"))
+        self.steps_combo = QComboBox()
+        self.steps_combo.addItem("30 (fast)", 30)
+        self.steps_combo.addItem("50 (default)", 50)
+        self.steps_combo.addItem("70 (slow)", 70)
+        self.steps_combo.setCurrentIndex(1)
+        srow1.addWidget(self.steps_combo)
+        v.addLayout(srow1)
+
+        srow2 = QHBoxLayout()
+        srow2.addWidget(QLabel("Duration (video):"))
+        self.dur_combo = QComboBox()
+        self.dur_combo.addItem("~3s (73 frames)", 73)
+        self.dur_combo.addItem("~5s (121 frames)", 121)
+        self.dur_combo.addItem("~8s (193 frames)", 193)
+        self.dur_combo.addItem("~10s (241 frames)", 241)
+        self.dur_combo.setCurrentIndex(1)
+        srow2.addWidget(self.dur_combo, 1)
+        srow2.addWidget(QLabel("Seed (0=random):"))
+        self.seed_spin = QSpinBox()
+        self.seed_spin.setRange(0, 2147483647)
+        srow2.addWidget(self.seed_spin)
+        v.addLayout(srow2)
         self.g_gen = g_gen
 
         # ACTION
@@ -316,8 +350,10 @@ class ForgeGUI(QMainWindow):
                 "Write a prompt first, then press Magic.")
             return
         from forge.magic import enhance_prompt
-        self.magic_panel.setPlainText(enhance_prompt(prompt))
+        enhanced, neg_added = enhance_prompt(prompt)
+        self.magic_panel.setPlainText(enhanced)
         self.append_log(f"[MAGIC] Original prompt: {prompt}")
+        self.append_log(f"[MAGIC] Extended negative prompt will be applied")
 
     def insert_magic(self):
         text = self.magic_panel.toPlainText().strip()
@@ -366,9 +402,39 @@ class ForgeGUI(QMainWindow):
 
         rb, mode = self._current_gen_mode()
         needs_image = mode in ("i2i", "i2v")
+        self.dur_combo.setEnabled(mode in ("t2v", "i2v"))
+
         gen_ready = bool(prompt) or (needs_image and init_img) or \
                     (needs_image and itype == "image")
         video_feed_note = needs_image and not init_img and itype == "video"
+
+        if itype == "image" and not init_img:
+            self.init_img_path.setPlaceholderText(
+                f"Using your imported image: {os.path.basename(self.input_path.text())}")
+        elif video_feed_note:
+            self.init_img_path.setPlaceholderText(
+                "Auto: middle frame of your video will be used")
+        else:
+            self.init_img_path.setPlaceholderText(
+                "Browse for an image (Image-> modes)")
+
+        if gen_ready:
+            self.g_gen.setStyleSheet(f"QGroupBox {{ {READY_BORDER} }}")
+            if prompt or not needs_image:
+                note = " (using middle frame of video)" if video_feed_note else ""
+                self.gen_status.setText(f"READY: {rb.text()} will run{note}")
+            else:
+                self.gen_status.setText(
+                    f"READY: {rb.text()} will run using your imported image")
+        else:
+            self.g_gen.setStyleSheet("")
+            if not prompt and not needs_image:
+                self.gen_status.setText("Enter a prompt or import an image")
+            elif needs_image:
+                self.gen_status.setText(
+                    f"{rb.text()} needs an image - import one, or a video for auto-feed")
+            else:
+                self.gen_status.setText("Enter a prompt")
 
         if itype == "image" and not init_img:
             self.init_img_path.setPlaceholderText(
@@ -481,8 +547,15 @@ class ForgeGUI(QMainWindow):
             "frames": itype == "video" and self.cb_frames.isChecked(),
         }
 
-        rb, mode = self._current_gen_mode()
-        needs_image = mode in ("i2i", "i2v")
+        prompt = self.prompt_input.text().strip()
+        neg_prompt = self.neg_prompt_input.text().strip()
+        from forge.magic import EXTENDED_NEGATIVE_PROMPT
+        if EXTENDED_NEGATIVE_PROMPT and not neg_prompt.strip():
+            neg_prompt = EXTENDED_NEGATIVE_PROMPT
+        gen_w, gen_h = self.res_combo.currentData()
+        gen_steps = self.steps_combo.currentData()
+        gen_frames = self.dur_combo.currentData()
+        gen_seed = self.seed_spin.value() or None
         init_img = self.effective_init_image()
         run_gen = bool(prompt) or (needs_image and init_img) or \
                   (needs_image and itype == "image")
@@ -532,18 +605,26 @@ class ForgeGUI(QMainWindow):
                 ws.update(progress=0, message=f"Generating ({mode})...")
                 if mode == "t2i":
                     p = text_to_image(prompt, out_dir, filename="generated.png",
-                                      negative_prompt=neg_prompt, job_state=ws)
+                                      negative_prompt=neg_prompt, width=gen_w,
+                                      height=gen_h, steps=gen_steps,
+                                      seed=gen_seed, job_state=ws)
                 elif mode == "i2i":
                     p = image_to_image(prompt, init_img_local, out_dir,
                                        filename="generated.png",
                                        negative_prompt=neg_prompt, job_state=ws)
                 elif mode == "t2v":
                     p = text_to_video(prompt, out_dir, filename="generated.mp4",
-                                      negative_prompt=neg_prompt, job_state=ws)
+                                      negative_prompt=neg_prompt, width=gen_w,
+                                      height=gen_h, steps=gen_steps,
+                                      num_frames=gen_frames, seed=gen_seed,
+                                      job_state=ws)
                 else:
                     p = image_to_video(prompt, init_img_local, out_dir,
                                        filename="generated.mp4",
-                                       negative_prompt=neg_prompt, job_state=ws)
+                                       negative_prompt=neg_prompt, width=gen_w,
+                                       height=gen_h, steps=gen_steps,
+                                       num_frames=gen_frames, seed=gen_seed,
+                                       job_state=ws)
                 results["stages"]["generate"] = {"output": p}
                 ws.update(progress=100, message="Generation done")
             return results

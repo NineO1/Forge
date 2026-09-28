@@ -23,6 +23,9 @@ def _cleanup_gpu():
         import torch
         if torch.cuda.is_available():
             gc.collect()
+            peak = torch.cuda.max_memory_reserved() / (1024 ** 3)
+            if peak > 0.01:
+                log.info(f"[VRAM] peak reserved this job: {peak:.1f}GB")
             torch.cuda.empty_cache()
     except Exception:
         pass
@@ -57,7 +60,7 @@ def _steps(n, pipe, job_state, label):
 
 # ---------------------------------------------------------------- text->image
 def text_to_image(prompt, output_dir, filename=None, negative_prompt="",
-                  width=1024, height=1024, steps=30, seed=None, job_state=None):
+    width=1024, height=1024, steps=35, seed=None, job_state=None):
     """Generate an image from text. Returns output PNG path.
 
     filename used EXACTLY as typed (no prefixes/suffixes), default gen_image.png
@@ -147,6 +150,40 @@ def _fix_frame_count(num_frames):
         return 9
     return ((num_frames - 1) // 8) * 8 + 1
 
+# ------------------------------------------------------------------ VRAM governor
+# Pre-flight check: projects peak VRAM for a resolution x frame-count and
+# refuses combos above 90% of currently free VRAM.
+# CALIBRATE ONCE: run t2v at Sweet spot (704x480) @ ~5s (121 frames), copy
+# the "[VRAM] peak reserved this job" number from the log into _BASE_PEAK_GB.
+
+_BASE_PEAK_GB = 15.0          # placeholder - replace with your measured peak
+_STATIC_GB = 10.5             # persistent portion (pipeline + weights)
+_BASE_W, _BASE_H, _BASE_F = 704, 480, 121
+_VRAM_CAP = 0.90
+
+def _vram_projected_gb(width, height, num_frames):
+    base_work = _BASE_W * _BASE_H * (_BASE_F - 1)
+    work = width * height * (num_frames - 1)
+    act_base = _BASE_PEAK_GB - _STATIC_GB
+    return _STATIC_GB + act_base * (work / base_work)
+
+def _vram_guard(width, height, num_frames):
+    """Raise a clear error if this combo projects above the 90% cap."""
+    import torch
+    if not torch.cuda.is_available():
+        return
+    projected = _vram_projected_gb(width, height, num_frames)
+    free_gb = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+    cap_gb = free_gb * _VRAM_CAP
+    log.info(f"[VRAM] free={free_gb:.1f}GB cap={cap_gb:.1f}GB "
+             f"projected={projected:.1f}GB for {width}x{height}@{num_frames}f")
+    torch.cuda.reset_peak_memory_stats()
+    if projected > cap_gb:
+        raise RuntimeError(
+            f"{width}x{height} @ {num_frames} frames projects to "
+            f"{projected:.1f}GB, above the 90% guard ({cap_gb:.1f}GB free). "
+            f"Lower duration or resolution.")
+
 LTX_MODEL = "Lightricks/LTX-Video"
 
 def _ltx_pipe(cls):
@@ -158,9 +195,9 @@ def _ltx_pipe(cls):
     return pipe.to("cuda" if torch.cuda.is_available() else "cpu")
 
 # -------------------------------------------------------------- text->video
-def text_to_video(prompt, output_dir, filename=None, negative_prompt="worst quality, blurry, jittery",
-                  width=768, height=512, num_frames=121, steps=40, seed=None,
-                  fps=24, job_state=None):
+def text_to_video(prompt, output_dir, filename=None, negative_prompt="",
+    width=704, height=480, num_frames=121, steps=35, guidance_scale=4.5,
+    seed=None, job_state=None):
     """Generate a video from text. Returns output MP4 path."""
     from diffusers import LTXPipeline
     from diffusers.utils import export_to_video
@@ -180,18 +217,19 @@ def text_to_video(prompt, output_dir, filename=None, negative_prompt="worst qual
     gen = gen.manual_seed(seed) if seed is not None else gen
 
     cb = _steps(steps, pipe, job_state, "t2v")
-    width = _snap(width, 32, 256, 704)  # LTX training sweet spot
-    height = _snap(height, 32, 256, 480)  # LTX training sweet spot
-    num_frames = _snap(num_frames - 1, 8, 8, 120) + 1
+    width = _snap(width, 32, 256, 1280) # raised for 16:9 options
+    height = _snap(height, 32, 256, 736)
+    num_frames = _snap(num_frames - 1, 8, 8, 240) + 1 # up to ~10s @ 24fps
+    _vram_guard(width, height, num_frames)
     log.info(f"snapped: {width}x{height} @ {num_frames} frames")
     video = pipe(prompt=prompt, negative_prompt=negative_prompt,
                 width=width, height=height, num_frames=num_frames,
-                num_inference_steps=steps, guidance_scale=4.5, generator=gen,
-                callback_on_step_end=cb).frames[0]
+                num_inference_steps=steps, guidance_scale=guidance_scale,
+                generator=gen, callback_on_step_end=cb).frames[0]
 
     if job_state:
         job_state.update(progress=100, message="Decoding frames & encoding video...")
-    export_to_video(video, out_path, fps=fps)
+    export_to_video(video, out_path, fps=24)  # LTX-Video native fps
     del video
     del pipe
     log.info(f"text->video saved: {out_path}")
@@ -202,9 +240,8 @@ def text_to_video(prompt, output_dir, filename=None, negative_prompt="worst qual
 
 # ------------------------------------------------------------- image->video
 def image_to_video(prompt, init_image, output_dir, filename=None,
-                   negative_prompt="worst quality, blurry, jittery, bad anatomy, distorted, fused fingers, missing limbs, low resolution, pixelated, cropped, out of frame, bad hands, mutation, deformed, extra limbs, disfigured",
-                   width=768, height=512, num_frames=121, steps=50, seed=None,
-                   fps=24, job_state=None):
+    width=704, height=480, num_frames=121, steps=35, guidance_scale=5.0,
+    strength=0.75, seed=None, job_state=None):
     """Animate a still image into a video. Returns output MP4 path.
 
     init_image: source image (Forge frame, thumbnail, or any file)
@@ -229,19 +266,20 @@ def image_to_video(prompt, init_image, output_dir, filename=None,
     gen = gen.manual_seed(seed) if seed is not None else gen
 
     cb = _steps(steps, pipe, job_state, "i2v")
-    width = _snap(width, 32, 256, 704)  # LTX training sweet spot
-    height = _snap(height, 32, 256, 480)  # LTX training sweet spot
-    num_frames = _snap(num_frames - 1, 8, 8, 120) + 1
+    width = _snap(width, 32, 256, 1280) # raised for 16:9 options
+    height = _snap(height, 32, 256, 736)
+    num_frames = _snap(num_frames - 1, 8, 8, 240) + 1 # up to ~10s @ 24fps
+    _vram_guard(width, height, num_frames)
     log.info(f"snapped: {width}x{height} @ {num_frames} frames")
     video = pipe(prompt=prompt, negative_prompt=negative_prompt,
                 image=src, width=width, height=height,
                 num_frames=num_frames, num_inference_steps=steps,
-                guidance_scale=5.5,
+                guidance_scale=guidance_scale,
                 generator=gen, callback_on_step_end=cb).frames[0]
 
     if job_state:
         job_state.update(progress=100, message="Decoding frames & encoding video...")
-    export_to_video(video, out_path, fps=fps)
+    export_to_video(video, out_path, fps=24)  # LTX-Video native fps
     del video
     del src
     del pipe

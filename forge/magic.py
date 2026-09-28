@@ -6,7 +6,13 @@ tailored for LTX-Video. Zero dependencies. Original text is always
 preserved at the front of the output.
 """
 
-ENHANCER_VERSION = "1.0"
+ENHANCER_VERSION = "1.1"
+
+# Automatic negative terms appended to ALL generations
+EXTENDED_NEGATIVE_PROMPT = (
+    "flickering, morphing, jittery motion, distortion, low quality, "
+    "bad anatomy, fused fingers, extra limbs, blurry"
+)
 
 # ---------------------------------------------------------------- term banks
 # Ordered by prompt-adherence value for LTX-Video: motion and camera first,
@@ -78,17 +84,18 @@ def _has_hint(prompt_lower, category):
     return any(h in prompt_lower for h in _HINTS[category])
 
 
-def enhance_prompt(text: str) -> str:
+def enhance_prompt(text: str, include_auto_negative: bool = True) -> tuple[str, str]:
     """
     Enhance a user prompt for LTX-Video generation.
 
-    Returns the enhanced prompt. The user's original wording is always
-    kept as the leading clause — enhancement adds cinematic scaffolding
-    around it, never replaces it.
+    Returns (enhanced_prompt, negative_prompt). The user's original wording is
+    always kept as the leading clause — enhancement adds cinematic scaffolding
+    around it, never replaces it. If include_auto_negative, EXTENDED_NEGATIVE_PROMPT
+    is appended to the negative prompt.
     """
     original = (text or "").strip()
     if not original:
-        return ""
+        return "", ""
 
     low = original.lower()
 
@@ -122,7 +129,14 @@ def enhance_prompt(text: str) -> str:
         # User already covered everything — add pacing guidance only.
         additions.append("paced deliberately, holding a single continuous shot")
 
-    return head + ", " + ", ".join(additions) + "."
+    enhanced = head + ", " + ", ".join(additions) + ", smooth motion, high temporal consistency, photorealistic details"
+
+    # Build negative prompt: user's input + auto terms
+    neg_base = ""
+    if include_auto_negative:
+        neg_base = EXTENDED_NEGATIVE_PROMPT
+
+    return enhanced, neg_base
 
 
 if __name__ == "__main__":
